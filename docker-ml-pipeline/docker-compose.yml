@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  jupyterlab:
+    build: .
+    container_name: jupyter_ml
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=ml_data
+      - DB_USER=ml_user
+      - DB_PASSWORD=ml_pass
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    container_name: db_conn
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ml_data
+      - POSTGRES_USER=ml_user
+      - POSTGRES_PASSWORD=ml_pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ml_user -d ml_data"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  pgdata:

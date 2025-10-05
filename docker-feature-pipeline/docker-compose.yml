@@ -1,0 +1,118 @@
+version: "3.9"
+
+x-environment: &default-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+
+services:
+  jupyter:
+    build: .
+    container_name: feast_jupyter
+    ports: ["8888:8888"]
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./feast_repo:/app/feast_repo
+    environment:
+      FEAST_USAGE: "local"
+      OFFLINE_DB_URI: postgresql+psycopg2://feast:feast@postgres:5432/feast_offline
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:15
+    container_name: feature_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["5433:5432"] # optional, if you want host access
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      retries: 10
+
+  # One-shot setup: create two databases + users for airflow & feast
+  db-init:
+    image: postgres:15
+    depends_on: [postgres]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "apt-get update && apt-get install -y postgresql-client &&
+       until pg_isready -h postgres -U postgres; do sleep 2; done &&
+       psql -h postgres -U postgres -c \"CREATE USER airflow WITH PASSWORD 'airflow' CREATEDB;\" || true &&
+       psql -h postgres -U postgres -c \"CREATE DATABASE airflow OWNER airflow;\" || true &&
+       psql -h postgres -U postgres -c \"CREATE USER feast WITH PASSWORD 'feast';\" || true &&
+       psql -h postgres -U postgres -c \"CREATE DATABASE feast_offline OWNER feast;\" || true
+      "
+    environment:
+      PGPASSWORD: postgres
+
+  redis:
+    image: redis:7
+    container_name: feast_redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  airflow-webserver:
+    image: apache/airflow:2.9.3
+    container_name: airflow_web
+    command: webserver
+    ports: ["8080:8080"]
+    env_file: .env
+    environment:
+      <<: *default-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - postgres
+      - airflow-init
+    restart: unless-stopped
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.3
+    container_name: airflow_sched
+    command: scheduler
+    env_file: .env
+    environment:
+      <<: *default-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - postgres
+      - airflow-init
+    restart: unless-stopped
+
+  airflow-init:
+    image: apache/airflow:2.9.3
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    env_file: .env
+    environment:
+      <<: *default-env
+      _AIRFLOW_DB_UPGRADE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "admin"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    command: -c "airflow db upgrade && airflow users create \
+                 --username $$ _AIRFLOW_WWW_USER_USERNAME \
+                 --password $$ _AIRFLOW_WWW_USER_PASSWORD \
+                 --firstname Admin --lastname User --role Admin --email admin@example.com || true"
+
+volumes:
+  pgdata:
