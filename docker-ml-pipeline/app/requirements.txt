@@ -1,0 +1,5 @@
+# add package versions for consistency across environments
+fastapi == 0.119.0
+uvicorn == 0.38.0
+scikit-learn == 1.7.2
+joblib == 1.5.2
